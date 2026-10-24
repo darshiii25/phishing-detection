@@ -10,7 +10,7 @@ from typing import List, Tuple
 
 # Base Directories
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+DATA_DIR = BASE_DIR / "src"
 MODELS_DIR = BASE_DIR / "models"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 
@@ -56,7 +56,7 @@ class CNNConfig:
     dropout_rate: float = 0.2
     learning_rate: float = 0.001
     batch_size: int = 64
-    epochs: int = 5
+    epochs: int = 15
     model_save_path: Path = MODELS_DIR / "cnn_feature_extractor.keras"
 
 
@@ -78,8 +78,8 @@ class WSOConfig:
 
     Formulated in accordance with Albahadili et al. (2024), Eqs. 8-25.
     """
-    population_size: int = 20    # Number of candidate white sharks
-    max_iterations: int = 10     # Configurable search iterations (e.g., 10 for dev, 50-100 for prod)
+    population_size: int = 30    # Number of candidate white sharks
+    max_iterations: int = 25     # Configurable search iterations (e.g., 10 for dev, 50-100 for prod)
     random_seed: int = 42
     # WSO kinematic hyperparameters (paper Eqs. 9-11, 17, 20)
     p_min: float = 0.5
@@ -106,7 +106,7 @@ class LSTMConfig:
     dense_units: int = 32
     learning_rate: float = 0.001
     batch_size: int = 64
-    epochs: int = 10
+    epochs: int = 20
     # Adaptation: reshape 1D selected features into 2D sequence (timesteps, channels)
     # Options: 'steps_1' -> shape (k, 1), 'step_k' -> shape (1, k)
     sequence_mode: str = "steps_1"

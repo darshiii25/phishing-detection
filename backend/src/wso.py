@@ -16,8 +16,10 @@ Algorithm Mechanics:
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 import json
 from pathlib import Path
+import time
 from typing import Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 
@@ -154,6 +156,11 @@ class WhiteSharkOptimizer:
         d = self.num_features
         N = self.population_size
         MaxIter = self.max_iterations
+        start_time = time.perf_counter()
+
+        def progress_time() -> str:
+            elapsed = time.perf_counter() - start_time
+            return f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | elapsed {elapsed / 60:.1f} min"
 
         # 1. Initialize Continuous Population X and Velocities V
         # Positions initialized uniformly in [-1, 1]
@@ -182,7 +189,10 @@ class WhiteSharkOptimizer:
 
         history: List[Dict[str, float]] = []
         if verbose:
-            print(f"[WSO] Init: Best Cost = {gbest_fitness:.5f} | Selected Feats = {gbest_mask.sum()}/{d}")
+            print(
+                f"[WSO] {progress_time()} | Init | Best Cost = {gbest_fitness:.5f} | "
+                f"Selected Feats = {gbest_mask.sum()}/{d}"
+            )
 
         # 3. Main Iterative Optimization Loop
         for t in range(1, MaxIter + 1):
@@ -264,11 +274,13 @@ class WhiteSharkOptimizer:
                 "best_cost": float(gbest_fitness),
                 "mean_cost": float(np.mean(pbest_fitnesses)),
                 "num_selected": int(gbest_mask.sum()),
+                "elapsed_seconds": float(time.perf_counter() - start_time),
             })
 
             if verbose:
                 print(
-                    f"[WSO] Iter {t:02d}/{MaxIter:02d} | Best Cost: {gbest_fitness:.5f} | "
+                    f"[WSO] {progress_time()} | Iter {t:02d}/{MaxIter:02d} | "
+                    f"Best Cost: {gbest_fitness:.5f} | "
                     f"Mean Cost: {np.mean(pbest_fitnesses):.5f} | "
                     f"Selected: {gbest_mask.sum()}/{d}"
                 )
