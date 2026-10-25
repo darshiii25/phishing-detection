@@ -1,0 +1,34 @@
+{
+  "label_mapping": {
+    "0": "phishing",
+    "1": "legitimate"
+  },
+  "split_seed": 42,
+  "train_rows": 80697,
+  "validation": {
+    "accuracy": 0.999702587488847,
+    "phishing_precision": 0.9996850393700787,
+    "phishing_recall": 0.9998424948810837,
+    "phishing_f1": 0.9997637609260571,
+    "phishing_roc_auc": 0.9999982513476632,
+    "phishing_positive_confusion_matrix_tn_fp_fn_tp": [
+      3736,
+      2,
+      1,
+      6348
+    ]
+  },
+  "held_out_test": {
+    "accuracy": 0.9994052339413164,
+    "phishing_precision": 0.9993702770780857,
+    "phishing_recall": 0.9996850393700787,
+    "phishing_f1": 0.9995276334435522,
+    "phishing_roc_auc": 0.9999986307891289,
+    "phishing_positive_confusion_matrix_tn_fp_fn_tp": [
+      3734,
+      4,
+      2,
+      6348
+    ]
+  }
+}

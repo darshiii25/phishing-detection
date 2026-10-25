@@ -1,0 +1,6 @@
+{
+  "files.exclude": {
+    "backend/src/experimental_ml": true,
+    "backend/models/url_classifier.joblib": true
+  }
+}
