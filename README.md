@@ -1,389 +1,245 @@
-# Phishing URL Detection: Modular Research Codebase
+# Character-Level Phishing URL Detection
 
-A modular machine-learning codebase for character-level phishing URL detection using Convolutional Neural Networks (CNN), binary White Shark Optimization (WSO) with Multi-Layer Perceptron (MLP) subset evaluation, and Long Short-Term Memory (Bi-LSTM) sequence classification.
+A Python research codebase for binary URL classification. The implemented pipeline combines character-level URL encoding, a one-dimensional CNN feature extractor, binary White Shark Optimization (WSO) for feature selection, an MLP fitness evaluator, and a Bi-LSTM classifier.
 
----
+The design is inspired by *Detection of phishing URLs with deep learning based on GAN-CNN-LSTM network and swarm intelligence algorithms* by Abbas Jabr Saleh Albahadili, Ayhan Akbas, and Javad Rahebi (2024). This repository is a modular adaptation, not a claim of exact reproduction of that paper.
 
-## 1. Project Overview & Research Context
+## 1. Scopegit 
 
-This project implements a modified, modular architecture inspired by the research paper:
-> **"Detection of phishing URLs with deep learning based on GAN-CNN-LSTM network and swarm intelligence algorithms"**  
-> *Abbas Jabr Saleh Albahadili, Ayhan Akbas, Javad Rahebi (Signal, Image and Video Processing, Springer, 2024)*
+- Uses URL text and binary labels; it does not fetch URLs, resolve DNS, or inspect page content.
+- Omits the paper's GAN component and does not generate synthetic samples.
+- Preserves the cleaned dataset's natural class distribution.
+- Trains a CNN on the URL labels, uses WSO to select from its 64-dimensional learned representation, and evaluates candidate feature subsets with an MLP.
+- Trains a Bi-LSTM on the selected CNN feature values. In the default `steps_1` input mode, the selected feature indices are treated as sequence steps; they are not the original URL characters or time steps.
+- The repository contains training and prediction entry points, model artifacts, output JSON files, and unit tests. Existing output files are artifacts from particular runs, not guaranteed results of every run.
 
-### Architectural Adaptation & Project Scope
-- **GAN is excluded:** In accordance with project requirements, Generative Adversarial Networks (GANs) are omitted.
-- **Natural Class Distribution Preserved:** Synthetic oversampling (e.g., SMOTE or GAN-based generation) is not applied. The natural dataset imbalance (~63% legitimate, ~37% phishing) is preserved throughout preprocessing, and stratified splitting maintains identical class proportions across Train, Validation, and Test partitions.
-- **MLP Fitness Evaluator is included:** An MLP classifier is integrated specifically to evaluate candidate CNN feature subsets during WSO meta-heuristic optimization (paper Eq. 25).
-- **Bi-LSTM Classifier is included:** A Bidirectional LSTM network performs final sequence-based classification on the feature subset selected by WSO.
-- **Strict Role Boundaries:**
-  - **Darshi (This Codebase):** Preprocessing, character-level encoding, CNN feature extraction, WSO feature selection, MLP fitness evaluation, Bi-LSTM classifier, evaluation metrics, configuration, unit tests, and documentation.
-  - **Aditya (Teammate 1):** Model training experiments, learning rate scheduling, class weighting, hyperparameter tuning, and comparative baseline benchmarks.
-  - **Teammate 2:** User interface (UI) and demonstration dashboard.
+## 2. Pipeline and Data Flow
 
----
-
-## 2. End-to-End Pipeline Architecture
-
-```
-Raw URL Dataset (data/Dataset.csv)
-  │
-  ▼
-[1] Preprocessing (src/preprocessing.py)
-  │  - Schema validation ('url', 'label')
-  │  - Non-destructive sanitization (drop nulls, trim whitespace, deduplicate)
-  │  - Stratified Train (80%) / Val (10%) / Test (10%) splitting
-  │
-  ▼
-[2] Character-Level Encoding (src/encoding.py)
-  │  - Vocabulary mapped exclusively on training partition
-  │  - Reserved tokens: <PAD>=0, <UNK>=1; 86 ASCII dataset characters >= 2
-  │  - Sequence length: max_url_len=200 -> Matrix shape (N, 200) int32
-  │
-  ▼
-[3] CNN Feature Extraction (src/cnn.py)
-  │  - Embedding (200, embedding_dim) -> Conv1D Stack -> GlobalMaxPooling1D
-  │  - Feature Bottleneck Layer -> Dense(d) -> Feature matrix (N, d) float32
-  │
-  ▼
-[4] WSO Feature Selection (src/wso.py)
-  │  - Swarm Intelligence: Continuous velocity and position updates (Eqs. 8-21)
-  │  - V-shape / S-shape transfer function binarization (Eqs. 22-24)
-  │  - Candidate feature mask (d,) in {0, 1}
-  │
-  ├──► [4b] MLP Fitness Evaluator (src/mlp.py)
-  │      - Evaluates candidate mask on Validation partition ONLY
-  │      - Cost = alpha * Val_Error + beta * (selected_feats / d) [Eq. 25]
-  │      - In-memory hashing cache eliminates redundant MLP training
-  │
-  ▼ Optimal Feature Subset: k features selected (k <= d)
-[5] LSTM Sequence Classification (src/lstm.py)
-  │  - Sequence Adaptation: Reshapes (N, k) -> (N, k, 1) ('steps_1')
-  │  - Bidirectional LSTM with recurrent dropout and dense sigmoid head
-  │
-  ▼
-[6] Performance Evaluation (src/evaluation.py)
-     - Accuracy, Precision, Recall/Sensitivity, F1-Score, ROC-AUC
-     - Confusion Matrix: TP, FP, TN, FN
+```text
+src/Dataset.csv
+    |
+    v
+Load, sanitize, and stratified split
+    |  configured run: 80% train / 10% validation / 10% test
+    v
+Fit character vocabulary on training URLs only
+    |
+    v
+Encode each URL as 200 integer character IDs
+    |
+    v
+Train character embedding + Conv1D CNN classifier
+    |
+    v
+Extract one 64-value vector per URL
+    |
+    +---- train and validation vectors ---> WSO + MLP fitness evaluation
+    |                                        selects k of 64 features
+    v
+Select the same k columns from each split
+    |
+    v
+Reshape (N, k) to (N, k, 1)
+    |
+    v
+Train Bi-LSTM classifier and evaluate on the held-out test partition
 ```
 
----
+The WSO evaluator trains an MLP per distinct candidate mask using the training features and scores it on the validation features. The test partition is not passed to the fitness evaluator. The feature extractor does produce test features so the final selected columns can be evaluated after feature selection.
 
-## 3. Project Directory Structure
+### Split configuration
 
+The end-to-end script reads split ratios from `DEFAULT_CONFIG`: **80% train, 10% validation, and 10% test (8:1:1)**, with random seed `42`. Splitting is stratified. This is the setting used by `src/train_pipeline.py` unless the configuration is changed. The standalone `preprocess_pipeline()` function uses the same 80/10/10 defaults.
+
+## 3. Dataset
+
+The configured dataset path is `src/Dataset.csv`; the expected columns are `url` and `label`.
+
+| Property | Observed in the current CSV |
+| :--- | :--- |
+| Raw rows | 100,873 |
+| Rows with missing URL | 0 |
+| Rows with missing label | 1 |
+| Rows after current cleaning | 100,872 |
+| Duplicate URLs removed | 0 |
+| Label `0` (phishing) | 63,492 (62.94%) |
+| Label `1` (legitimate) | 37,380 (37.06%) |
+| Shortest URL | 7 characters |
+| Median URL length | 31 characters |
+| 90th / 95th / 99th percentile length | 56 / 63 / 87 characters |
+| 99.9th percentile / maximum length | approximately 196 / 474 characters |
+
+The label convention used by this project is **`1 = legitimate` and `0 = phishing`**. Preprocessing drops rows missing either required value, trims surrounding URL whitespace, rejects non-binary labels, and removes duplicate URL strings when `drop_duplicates=True`. Protocol stripping and lowercasing are disabled by default; URL strings are otherwise kept case-sensitive and unchanged. The configured sequence limit of 200 characters covers approximately 99.9% of this CSV's URL lengths; longer strings are truncated from the right.
+
+These counts describe the CSV currently in the repository. Re-audit the dataset if it is replaced or modified.
+
+## 4. Technical Design and Dimensions
+
+Let `N` denote the number of examples in a partition, `d = 64` the CNN feature dimension, and `k` the number of features selected by WSO (`1 <= k <= d`).
+
+### 4.1 Preprocessing and character encoding
+
+1. Load `url` and `label`, sanitize rows, and create stratified train, validation, and test partitions.
+2. Fit `UrlCharacterEncoder` on training URLs only. The saved vocabulary uses IDs `0` for `<PAD>` and `1` for `<UNK>`; characters have IDs starting at `2`.
+3. Encode each URL to a fixed-length `int32` vector of length 200. Short URLs are right-padded; long URLs are truncated to their first 200 characters.
+4. The vocabulary is data-derived at training time. The current saved vocabulary contains 86 observed characters plus the two reserved tokens (88 entries total); a different training split can produce a different vocabulary.
+
+### 4.2 CNN feature extractor and classifier
+
+The CNN uses `embedding_dim=64`, Conv1D filters `[128, 128, 64]`, kernel sizes `[7, 5, 3]`, max-pool sizes `[3, 3, 2]`, and a 64-unit dense feature bottleneck. Convolutions use ReLU and `padding="same"`; pooling uses `padding="same"`. The classifier head uses dropout `0.2` and a single sigmoid output.
+
+| Layer / operation | Output shape | Default details |
+| :--- | :--- | :--- |
+| Integer URL input | `(N, 200)` | `int32` |
+| Character embedding | `(N, 200, 64)` | 64-dimensional embedding |
+| Conv1D + max pool, block 1 | `(N, 67, 128)` | 128 filters, kernel 7, pool 3 |
+| Conv1D + max pool, block 2 | `(N, 23, 128)` | 128 filters, kernel 5, pool 3 |
+| Conv1D + max pool, block 3 | `(N, 12, 64)` | 64 filters, kernel 3, pool 2 |
+| Global max pooling | `(N, 64)` | Reduces across remaining sequence positions |
+| Dense feature bottleneck | `(N, 64)` | ReLU; `d = 64` features |
+| Dropout + binary output | `(N, 1)` | Dropout 0.2; sigmoid |
+
+The model builder returns both a compiled CNN classifier and a feature-extractor model that ends at the 64-value bottleneck. The classifier uses Adam (`learning_rate=0.001`) and binary cross-entropy. The default configuration specifies batch size 64 and 15 CNN training epochs.
+
+### 4.3 WSO feature selection and MLP fitness
+
+Each WSO candidate is a binary mask of length `d`; `1` keeps a feature and `0` discards it. Continuous positions and velocities are updated during the search, then converted to binary masks with the configured transfer function (`v_shape` by default). The implementation guarantees at least one feature is selected.
+
+The MLP candidate evaluator uses hidden layers `[32, 16]`, ReLU activations, dropout `0.1`, Adam (`0.001`), and binary cross-entropy. Its default evaluation budget is 3 epochs per uncached candidate, batch size 64, and early-stopping patience 2. Identical masks are cached in memory.
+
+The fitness objective implemented is:
+
+```text
+cost = alpha * (1 - validation_accuracy) + beta * (k / d)
 ```
-phishing_detection/
-├── data/
-│   └── Dataset.csv              # 100,873-row URL dataset
-├── models/
-│   ├── .gitkeep
-│   ├── cnn_feature_extractor.keras  # Saved CNN weights (after training)
-│   └── lstm_classifier.keras        # Saved Bi-LSTM weights (after training)
-├── outputs/
-│   ├── .gitkeep
-│   ├── vocab.json               # Serialized character vocabulary
-│   ├── wso_selected_features.json # Selected binary mask & feature indices
-│   └── wso_history.json         # Iteration fitness progression log
+
+Defaults are `alpha=0.99` and `beta=0.01`. The configured WSO run uses population size 30, 25 iterations, random seed 42, `tau=4.125`, and `v_shape`. Lower fitness is preferred. These are experiment settings, not architecture-independent performance guarantees.
+
+The current `outputs/wso_selected_features.json` records a particular run selecting 2 of 64 features (indices 6 and 27). That is an observed artifact, not a fixed property of the algorithm or a promise that a fresh run will select the same features.
+
+### 4.4 Bi-LSTM classifier
+
+The selected CNN feature matrix `(N, k)` is converted by the default `steps_1` adapter into `(N, k, 1)`. Thus, each selected feature is treated as one LSTM timestep with one channel. The alternative `step_k` mode produces `(N, 1, k)`, treating the vector as one timestep with `k` channels.
+
+The default classifier has two bidirectional LSTM layers with 64 and 32 units per direction. The first returns sequences; the second returns its final representation. With `steps_1`, the principal dimensions are:
+
+| Layer / operation | Output shape | Default details |
+| :--- | :--- | :--- |
+| Selected features | `(N, k)` | `k` is determined by WSO |
+| `steps_1` adaptation | `(N, k, 1)` | `float32` |
+| First Bi-LSTM | `(N, k, 128)` | 64 units in each direction; sequences returned |
+| Second Bi-LSTM | `(N, 64)` | 32 units in each direction |
+| Dense projection + dropout | `(N, 32)` | ReLU; dropout 0.2 |
+| Sigmoid output | `(N, 1)` | Binary probability output |
+
+The LSTM uses Adam (`learning_rate=0.001`) and binary cross-entropy; configuration defaults are batch size 64 and 20 epochs. The training pipeline calculates balanced class weights for LSTM training. No class weighting is applied by the pipeline to CNN or MLP training.
+
+### 4.5 Shape contract
+
+| Stage | Input | Output | Type |
+| :--- | :--- | :--- | :--- |
+| Cleaned partition | CSV rows | `N` URL strings and `N` labels | strings / `int32` |
+| Character encoding | `N` URLs | `(N, 200)` | `int32` |
+| Embedding | `(N, 200)` | `(N, 200, 64)` | floating point |
+| CNN features | `(N, 200)` | `(N, 64)` | `float32` |
+| WSO-selected features | `(N, 64)` | `(N, k)` | `float32` |
+| LSTM input, `steps_1` | `(N, k)` | `(N, k, 1)` | `float32` |
+| Keras classifier output | model-specific input | `(N, 1)` | sigmoid probability |
+| Prediction helper output | `(N, 1)` | `(N,)` | `float32` probability or `int32` class |
+
+## 5. Label Handling and Evaluation
+
+The dataset convention is `1 = legitimate` and `0 = phishing`. The CNN and LSTM are trained directly on these dataset labels, so their sigmoid output represents the probability of class `1` (legitimate). `src/predict_url.py` reports this value as the legitimate probability and computes phishing probability as `1 - legitimate_probability`.
+
+For security metrics, `src/train_pipeline.py` converts the held-out labels and predictions to a phishing-positive representation (`phishing = 1 - dataset_label`) before calling the generic evaluator. Thus, reported precision, recall, F1, ROC-AUC, and confusion-matrix TP/FN refer to phishing URLs. The current `outputs/test_metrics.json` is a saved result from a particular run; regenerate it after changing the split or training setup before reporting results.
+
+## 6. Repository Layout
+
+```text
+phishing-detection/
+├── config.py
+├── requirements.txt
+├── README.md
 ├── src/
-│   ├── __init__.py
-│   ├── preprocessing.py         # CSV loading, validation, sanitization, stratified splits
-│   ├── encoding.py              # Character-to-integer tokenizer and batch encoder
-│   ├── cnn.py                   # 1D-CNN feature extractor and submodel interfaces
-│   ├── mlp.py                   # Lightweight MLP candidate fitness evaluator with caching
-│   ├── wso.py                   # Binary White Shark Optimizer (paper Eqs. 8-25)
-│   ├── lstm.py                  # Bi-LSTM sequence classifier and input adapter
-│   └── evaluation.py            # Classification metrics and confusion matrix plotter
-├── tests/
-│   ├── __init__.py
-│   ├── test_preprocessing.py    # 11 unit tests for preprocessing & splits
-│   ├── test_encoding.py         # 9 unit tests for vocabulary & encoding
-│   ├── test_wso.py              # 9 unit tests for CNN shapes, MLP caching, WSO search
-│   └── test_lstm_eval.py        # 8 unit tests for LSTM 3D inputs & evaluation metrics
-├── config.py                    # Central typed configuration dataclasses
-├── requirements.txt             # Verified package dependencies
-└── README.md                    # System documentation and developer handoff
+│   ├── Dataset.csv
+│   ├── cnn.py
+│   ├── encoding.py
+│   ├── evaluation.py
+│   ├── lstm.py
+│   ├── mlp.py
+│   ├── predict_url.py
+│   ├── preprocessing.py
+│   ├── train_pipeline.py
+│   └── wso.py
+├── models/
+│   ├── cnn_feature_extractor.keras
+│   └── lstm_classifier.keras
+├── outputs/
+│   ├── test_metrics.json
+│   ├── vocab.json
+│   ├── wso_history.json
+│   └── wso_selected_features.json
+└── tests/
+    ├── test_encoding.py
+    ├── test_lstm_eval.py
+    ├── test_preprocessing.py
+    └── test_wso.py
 ```
 
----
+`config.py` defines data paths and model/training defaults. `src/train_pipeline.py` runs the integrated training and evaluation flow. `src/predict_url.py` loads the saved vocabulary, CNN feature extractor, selected feature indices, and LSTM model to classify one entered URL. `outputs/` contains JSON artifacts; trained Keras files are stored in `models/`.
 
-## 4. Dependencies & Environment Setup
+## 7. Setup and Usage
 
-### Prerequisites
-- Python 3.10+ (tested and verified on Python 3.14 64-bit on Windows)
-- Windows PowerShell
+### Environment
 
-### Verified Dependencies (`requirements.txt`)
-- `numpy>=1.26.0`
-- `pandas>=2.0.0`
-- `tensorflow>=2.15.0`
-- `scikit-learn>=1.3.0`
-- `matplotlib>=3.8.0`
-- `pytest>=7.4.0`
-
-### Installation Steps (Windows PowerShell)
+Use a Python version supported by the TensorFlow release available for your operating system.
 
 ```powershell
-# Navigate into the project folder
-cd phishing_detection
-
-# (Optional) Create and activate a virtual environment
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-
-# Install required dependencies
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
----
+Dependencies declared in `requirements.txt`:
 
-## 5. Dataset Specification
+- NumPy `>=1.26.0`
+- pandas `>=2.0.0`
+- TensorFlow `>=2.15.0`
+- scikit-learn `>=1.3.0`
+- matplotlib `>=3.8.0`
+- pytest `>=7.4.0`
 
-- **File Path:** `data/Dataset.csv`
-- **Schema:**
-  - `url` (string): URL string (e.g., `http://keraekken-loagginnusa.godaddysites.com/`)
-  - `label` (integer/float): Target label
-    - `0` = Legitimate URL (negative class)
-    - `1` = Phishing URL (positive class)
-- **Empirical Dataset Audit:**
-  - **Total Raw Rows:** 100,873
-  - **Missing Values:** `url` has 0 missing; `label` had 1 missing row (`row 64772`), safely dropped during sanitization.
-  - **Duplicates:** 0 identical duplicate URL rows.
-  - **Cleaned Rows:** 100,872
-  - **Class Distribution:**
-    - Legitimate (`0`): 63,492 URLs (62.94%)
-    - Phishing (`1`): 37,380 URLs (37.06%)
-  - **URL Length Percentiles:**
-    - Min: 7 | 50% (Median): 31 | 75%: 35 | 90%: 56 | 95%: 63 | 99%: 87 | 99.9%: 196 | Max: 474 characters.
-    - Default `max_url_len = 200` covers **99.91%** of all URLs without truncation.
+Run from the repository root:
 
----
-
-## 6. Module Interfaces & Individual Usage Guide
-
-Each module in `src/` is independently importable. The code examples below reflect the exact implemented APIs:
-
-### A. Preprocessing Module (`src/preprocessing.py`)
-```python
-from config import DEFAULT_CONFIG
-from src.preprocessing import preprocess_pipeline
-
-# Loads Dataset.csv, sanitizes rows, and performs stratified 80/10/10 split
-splits = preprocess_pipeline(
-    file_path=DEFAULT_CONFIG.preprocessing.dataset_path,
-    train_ratio=0.80,
-    val_ratio=0.10,
-    test_ratio=0.10,
-    random_seed=42,
-    verbose=True  # Prints class distribution table across all splits
-)
-
-# Access splits (pd.Series of URLs and np.ndarray of binary int32 labels)
-X_train, y_train = splits.X_train, splits.y_train
-X_val, y_val     = splits.X_val, splits.y_val
-X_test, y_test   = splits.X_test, splits.y_test
-```
-
-### B. Character-Level Encoding (`src/encoding.py`)
-```python
-from src.encoding import UrlCharacterEncoder
-
-# Initialize encoder with max URL length
-encoder = UrlCharacterEncoder(max_url_len=200)
-
-# Fit vocabulary EXCLUSIVELY on training data to prevent data leakage
-encoder.fit(X_train)
-
-# Transform URL strings into 2D integer matrices of shape (N, 200)
-X_train_encoded = encoder.encode_batch(X_train)
-X_val_encoded   = encoder.encode_batch(X_val)
-X_test_encoded  = encoder.encode_batch(X_test)
-
-# Save vocabulary for inference
-encoder.save_vocabulary("outputs/vocab.json")
-
-# Later reload:
-# encoder = UrlCharacterEncoder.load_vocabulary("outputs/vocab.json")
-```
-
-### C. CNN Feature Extraction (`src/cnn.py`)
-```python
-from src.cnn import build_cnn_models, extract_features
-
-# Build classification model and intermediate feature extractor
-cnn_classifier, cnn_feature_extractor = build_cnn_models(
-    vocab_size=encoder.vocab_size,
-    max_url_len=200,
-    embedding_dim=64,
-    conv_filters=[128, 128, 64],
-    kernel_sizes=[7, 5, 3],
-    pool_sizes=[3, 3, 2],
-    feature_dense_dim=64,   # Feature dimension d
-    dropout_rate=0.2,
-    learning_rate=0.001
-)
-
-# Extract d-dimensional feature representations: output shape (N, 64)
-train_features = extract_features(cnn_feature_extractor, X_train_encoded, batch_size=128)
-val_features   = extract_features(cnn_feature_extractor, X_val_encoded, batch_size=128)
-test_features  = extract_features(cnn_feature_extractor, X_test_encoded, batch_size=128)
-```
-
-### D. WSO Feature Selection & MLP Evaluator (`src/mlp.py` & `src/wso.py`)
-```python
-from src.mlp import MLPFitnessEvaluator
-from src.wso import WhiteSharkOptimizer
-
-# 1. Instantiate MLP Fitness Evaluator (evaluates candidates on validation data)
-evaluator = MLPFitnessEvaluator(
-    X_train_features=train_features,
-    y_train=y_train,
-    X_val_features=val_features,
-    y_val=y_val,
-    hidden_units=[32, 16],
-    alpha=0.99,   # Weight on classification error
-    beta=0.01,    # Weight on feature subset ratio
-    epochs=3,     # Fast evaluation epochs
-    batch_size=64,
-    patience=2
-)
-
-# 2. Instantiate and run Binary White Shark Optimizer
-wso = WhiteSharkOptimizer(
-    num_features=train_features.shape[1],  # d = 64
-    population_size=20,                    # 20 candidate sharks
-    max_iterations=10,                     # Search iterations (e.g. 10 dev, 50-100 prod)
-    tau=4.125,                             # Acceleration coefficient
-    transfer_function="v_shape",           # Arctan transfer function
-    random_seed=42
-)
-
-# Run optimization
-wso_result = wso.optimize(fitness_func=evaluator.evaluate, verbose=True)
-
-# Inspect selected subset
-print("Selected feature count:", wso_result.num_selected)
-print("Selected feature indices:", wso_result.selected_indices)
-wso_result.save("outputs/wso_selected_features.json")
-
-# Filter feature matrices using selected indices
-train_selected = train_features[:, wso_result.selected_indices]
-val_selected   = val_features[:, wso_result.selected_indices]
-test_selected  = test_features[:, wso_result.selected_indices]
-```
-
-### E. Bi-LSTM Classification (`src/lstm.py`)
-```python
-from src.lstm import prepare_lstm_input, build_lstm_classifier, predict_classes, predict_probabilities
-
-# 1. Reshape 2D features (N, k) into 3D sequence tensor (N, k, 1)
-X_train_lstm = prepare_lstm_input(train_selected, sequence_mode="steps_1")
-X_val_lstm   = prepare_lstm_input(val_selected, sequence_mode="steps_1")
-X_test_lstm  = prepare_lstm_input(test_selected, sequence_mode="steps_1")
-
-# 2. Construct Bi-LSTM Classifier
-k = wso_result.num_selected
-lstm_model = build_lstm_classifier(
-    input_shape=(k, 1),
-    lstm_units=[64, 32],
-    bidirectional=True,
-    dropout_rate=0.2,
-    dense_units=32,
-    learning_rate=0.001
-)
-
-# (Teammate Aditya trains lstm_model here using fit(...))
-
-# 3. Predict on Test Set
-test_probabilities = predict_probabilities(lstm_model, X_test_lstm)
-test_predictions   = predict_classes(lstm_model, X_test_lstm, threshold=0.5)
-```
-
-### F. Performance Evaluation (`src/evaluation.py`)
-```python
-from src.evaluation import compute_metrics, plot_confusion_matrix
-
-# Calculate all metrics (Accuracy, Precision, Recall, F1, ROC-AUC)
-metrics_result = compute_metrics(
-    y_true=y_test,
-    y_pred=test_predictions,
-    y_probs=test_probabilities
-)
-
-# Print comprehensive formatted report
-metrics_result.print_report(dataset_name="Test Set")
-
-# Plot and save confusion matrix figure
-plot_confusion_matrix(
-    cm=metrics_result.confusion_matrix,
-    save_path="outputs/confusion_matrix.png",
-    title="Bi-LSTM Phishing URL Confusion Matrix"
-)
-```
-
----
-
-## 7. Tensor & Array Shape Contract
-
-| Processing Stage | Input Shape | Output Shape | Data Type | Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| **Preprocessing** | CSV file | `pd.Series` of strings | `object` / `str` | Offline loading & splitting |
-| **URL Encoding** | List of $N$ URLs | `(N, 200)` | `int32` | Right-padded with `<PAD>=0` |
-| **CNN Embedding** | `(N, 200)` | `(N, 200, 64)` | `float32` | Continuous character representations |
-| **CNN Features** | `(N, 200)` | `(N, 64)` | `float32` | $d=64$ bottleneck feature vector |
-| **WSO Selection** | `(N, 64)` | `(N, k)` | `float32` | $k \le 64$ features retained |
-| **LSTM Reshaping** | `(N, k)` | `(N, k, 1)` | `float32` | Sequence adaptation mode `'steps_1'` |
-| **Bi-LSTM Output** | `(N, k, 1)` | `(N,)` | `float32` / `int32` | Continuous $[0, 1]$ or binary $\{0, 1\}$ |
-
----
-
-## 8. Unit Testing & Verification
-
-The test suite uses synthetic data fixtures to test each module thoroughly without requiring long GPU runs or downloading full checkpoints.
-
-### Run All Test Suites (37 Unit Tests)
-From the `phishing_detection` project root:
 ```powershell
+# Train models, select features, and write evaluation/output artifacts
+python -m src.train_pipeline
+
+# Predict one URL using the saved artifacts
+python -m src.predict_url
+
+# Run unit tests
 python -m pytest tests/ -v
 ```
 
-### Run Subsystem Tests Individually
-```powershell
-# Preprocessing tests (11 tests: loading, cleaning, stratification, reproducibility)
-python -m pytest tests/test_preprocessing.py -v
+Training requires the dataset at `src/Dataset.csv`. It writes the character vocabulary and WSO results under `outputs/`, and saves the CNN feature extractor and LSTM classifier under `models/`. Run training before using the prediction entry point if those artifacts are missing or out of date.
 
-# Character encoding tests (9 tests: padding, truncation, UNK, vocabulary consistency)
-python -m pytest tests/test_encoding.py -v
+## 8. Outputs and Evaluation
 
-# CNN, MLP, and WSO tests (9 tests: tensor shapes, caching, binarization, convergence)
-python -m pytest tests/test_wso.py -v
+The pipeline writes:
 
-# LSTM and evaluation tests (8 tests: 3D reshaping, Bi-LSTM forward, metrics, CM plot)
-python -m pytest tests/test_lstm_eval.py -v
-```
+- `outputs/vocab.json`: encoder settings and character-to-ID mapping.
+- `outputs/wso_selected_features.json`: selected mask, selected indices, and fitness summary.
+- `outputs/wso_history.json`: best and mean fitness information per iteration.
+- `outputs/test_metrics.json`: saved metric values from the latest pipeline run.
+- `models/cnn_feature_extractor.keras` and `models/lstm_classifier.keras`: serialized Keras models.
 
----
+The evaluator reports accuracy, precision, recall/sensitivity, F1-score, ROC-AUC, and the confusion matrix. Interpret these according to the label-orientation warning above. Unit tests check implementation behavior and tensor contracts; they do not by themselves establish generalization or real-world phishing detection performance.
 
-## 9. Developer Handoff Guide for Teammate Aditya (Model Training)
+## 9. Limitations and Reporting Notes
 
-Aditya is responsible for model training experiments, hyperparameter tuning, and benchmark comparisons. Here is how to integrate these modules into experimental training scripts:
-
-1. **Step 1: Data Partitioning**
-   Import [preprocess_pipeline](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/preprocessing.py#L372) from `src.preprocessing`. Pass `train_ratio=0.8, val_ratio=0.1, test_ratio=0.1`. Do not apply artificial balancing; preserve the natural class ratio.
-2. **Step 2: URL Tokenizer Fitting**
-   Import [UrlCharacterEncoder](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/encoding.py#L31) from `src.encoding`. Call `encoder.fit(splits.X_train)`. Never fit on validation or test data. Save vocabulary to `outputs/vocab.json`.
-3. **Step 3: CNN Pretraining & Feature Extraction**
-   Import [build_cnn_models](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/cnn.py#L20) and [extract_features](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/cnn.py#L112) from `src.cnn`. You can train `cnn_classifier` on `X_train_encoded` with callbacks (e.g., `EarlyStopping`, `ReduceLROnPlateau`), save the weights, and then extract features from all partitions using `cnn_feature_extractor`.
-4. **Step 4: WSO Feature Optimization**
-   Import [MLPFitnessEvaluator](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/mlp.py#L65) from `src.mlp` and [WhiteSharkOptimizer](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/wso.py#L50) from `src.wso`. Instantiate the optimizer and run `.optimize(evaluator.evaluate)`. Tune `population_size` (e.g., 20) and `max_iterations` (e.g., 25–50).
-5. **Step 5: Bi-LSTM Final Classifier Training**
-   Import [prepare_lstm_input](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/lstm.py#L32) and [build_lstm_classifier](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/lstm.py#L64) from `src.lstm`. Format features using `steps_1` mode. Train using class weights (e.g., via `sklearn.utils.class_weight.compute_class_weight`) to account for the ~63/37 class distribution if desired.
-6. **Step 6: Final Test Evaluation**
-   Import [compute_metrics](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/evaluation.py#L82) and [plot_confusion_matrix](file:///c:/Users/Darshi/study/clg/sem/sem%205/IS/code/phishing_detection/src/evaluation.py#L137) from `src.evaluation`. Run inference on the untouched `X_test_lstm` and generate final metrics and confusion matrix figures.
-
----
-
-## 10. Limitations & Assumptions
-
-1. **Synthetic Unit Tests vs. Real Generalization:** The 37 unit tests verify programmatic correctness, data structures, tensor dimensions, caching, and convergence on synthetic batches. They do not claim or establish real-world classification accuracy. Full accuracy metrics will be established during Aditya's training experiments.
-2. **Fixed Sequence Length Assumption:** `max_url_len = 200` was chosen based on empirical percentile analysis (covering 99.91% of URLs in `Dataset.csv`). URLs exceeding 200 characters are truncated.
-3. **Fitness Cost Trade-off:** The fitness formula uses $\alpha = 0.99$ and $\beta = 0.01$. This strongly prioritizes minimizing classification error while applying a mild regularization penalty on the number of selected features.
-4. **Offline Operation:** All preprocessing and encoding runs strictly offline. The codebase never issues DNS lookups or HTTP requests to URLs.
+- A random stratified split from one CSV does not establish performance on future URLs, different sources, or a temporally independent dataset.
+- URL strings longer than 200 characters are truncated. The vocabulary maps unseen characters to `<UNK>`.
+- The LSTM receives selected CNN latent features, not raw character embeddings. In `steps_1` mode, it treats the retained feature order as a sequence; this is an architectural adaptation and should be described as such.
+- WSO fitness is validation accuracy combined with a feature-count penalty. Search settings and results can vary with the data, seed, and configuration.
+- The configured experimental split is 80/10/10 (8:1:1), stratified by the dataset label. State the split and label mapping (`1 = legitimate`, `0 = phishing`) explicitly when reporting results.
